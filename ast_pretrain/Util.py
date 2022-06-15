@@ -162,6 +162,7 @@ def get_train_data(query_vocab, ast_vocab, data_path):
         query_seq_list = pickle.load(open(train_query_path, 'rb'))
         var_vocab = pickle.load(open(var_vocab_path, 'rb'))
         ast_graph_list, _ = load_graphs(train_ast_graph_path)
+        codes = pickle.load(open(codes_path, 'rb'))
     else:
         f = open(train_data_path)
         lines = json.load(f)
