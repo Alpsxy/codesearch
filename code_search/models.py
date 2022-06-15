@@ -69,8 +69,8 @@ class ModelContra(PreTrainedModel):
         code_vec = F.normalize(code_vec, p=2, dim=-1, eps=1e-5)
         nl_vec = F.normalize(nl_vec, p=2, dim=-1, eps=1e-5)
 
-        sims1 = torch.matmul(nl_vec, code_vec.t()) / 0.15
-        sims2 = torch.matmul(code_vec, nl_vec.t()) / 0.15
+        sims1 = torch.matmul(nl_vec, code_vec.t()) / 0.07
+        sims2 = torch.matmul(code_vec, nl_vec.t()) / 0.07
 
 
         sims1 = sims1[labels == 1]
@@ -88,49 +88,27 @@ class ModelContra(PreTrainedModel):
             return loss
 
 
-    def forward(self, code_inputs, nl_inputs, labels, return_vec=False):
-        bs = code_inputs.shape[0]
-        inputs = torch.cat((code_inputs, nl_inputs), 0)
-        outputs = self.encoder(inputs, attention_mask=inputs.ne(1))[1]
-        code_vec = outputs[:bs]
-        nl_vec = outputs[bs:]
+    # def forward(self, code_inputs, nl_inputs, labels, return_vec=False):
+    #     bs = code_inputs.shape[0]
+    #     inputs = torch.cat((code_inputs, nl_inputs), 0)
+    #     outputs = self.encoder(inputs, attention_mask=inputs.ne(1))[1]
+    #     code_vec = outputs[:bs]
+    #     nl_vec = outputs[bs:]
 
-        code_vec = F.normalize(code_vec, p=2, dim=-1, eps=1e-5)
-        nl_vec = F.normalize(nl_vec, p=2, dim=-1, eps=1e-5)
+    #     code_vec = F.normalize(code_vec, p=2, dim=-1, eps=1e-5)
+    #     nl_vec = F.normalize(nl_vec, p=2, dim=-1, eps=1e-5)
 
-        label = torch.arange(bs).cuda().long()
+    #     label = torch.arange(bs).cuda().long()
 
-        sims = torch.matmul(nl_vec, code_vec.t()) / 0.15
+    #     sims = torch.matmul(nl_vec, code_vec.t()) / 0.07
 
-        loss = self.loss_func(sims, label)
+    #     loss = self.loss_func(sims, label)
 
-        if return_vec:
-            return code_vec, nl_vec
-        else:
-            return loss
-        # nl_vec = nl_vec.unsqueeze(1).repeat([1, bs, 1])
-        # code_vec = code_vec.unsqueeze(0).repeat([bs, 1, 1])
-        # logits = self.mlp(torch.cat((nl_vec, code_vec, nl_vec-code_vec, nl_vec*code_vec), 2)).squeeze(2) # (Batch, Batch)
-        # # logits = self.mlp(torch.cat((nl_vec, code_vec), 2)).squeeze(2)
-        # matrix_labels = torch.diag(labels).float()  # (Batch, Batch)
-        # poss = logits[matrix_labels==1]
-        # negs = logits[matrix_labels==0]
+    #     if return_vec:
+    #         return code_vec, nl_vec
+    #     else:
+    #         return loss
 
-        # # loss = self.loss_func(logits, matrix_labels)
-        # # bce equals to -(torch.log(1-logits[matrix_labels==0]).sum() + torch.log(logits[matrix_labels==1]).sum()) / (bs*bs)
-        # loss = - (torch.log(1 - negs).mean() + torch.log(poss).mean())
-        # if math.isinf(loss) or math.isnan(loss):
-        #     print(logits)
-        #     print("----------------\n")
-        #     print(matrix_labels)
-        #     print("----------------\n")
-        #     print(poss)
-        #     print("----------------\n")
-        #     print(negs)
-        #     print("----------------\n")
-        #     print(loss)
-        # predictions = (logits.gather(0, torch.arange(bs, device=loss.device).unsqueeze(0)).squeeze(0) > 0.5).int()
-        # return loss
 
 class ModelContraOnline(PreTrainedModel):
     def __init__(self, encoder, config, tokenizer, args):

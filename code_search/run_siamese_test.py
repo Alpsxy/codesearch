@@ -106,8 +106,8 @@ class TextDataset(Dataset):
         with open(file_path, 'r') as f:
             self.data = json.load(f)
         for js in self.data:
-            # if js['label'] == 1:
-            self.examples.append(convert_examples_to_features(js, tokenizer, args))
+            if js['label'] == 1:
+                self.examples.append(convert_examples_to_features(js, tokenizer, args))
         # 如果是training集，就print前3个
         if 'train' in file_path:
             for idx, example in enumerate(self.examples[:3]):
@@ -244,7 +244,7 @@ def train(args, train_dataset, model, tokenizer):
         tr_num=0
         train_loss=0
         for step, batch in bar:
-            if (batch[2] == 0).all():
+            if torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1:
                 continue
             code_inputs = batch[0].to(args.device)
             nl_inputs = batch[1].to(args.device)
