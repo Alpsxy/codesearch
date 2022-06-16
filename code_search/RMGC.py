@@ -1,3 +1,4 @@
+from turtle import forward
 import torch
 from torch import dropout, nn
 from torch.nn.functional import cosine_similarity
@@ -54,3 +55,6 @@ class RMGC(nn.Module):
         ast_seq_level_repr = self.get_lstm_packed_result(ast_seq_level, self.ast_emb, self.ast_seq_dropout_layer, self.ast_seq_level_LSTM)
         # code_repr = self.fusion_linear(code_seq_repr)
         return torch.cat([ast_seq_pre_repr, ast_seq_level_repr], dim=-1)
+
+    def forward(self, ast_seq, ast_seq_level):
+        return self.get_ast_repr(ast_seq, ast_seq_level)

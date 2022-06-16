@@ -87,6 +87,60 @@ class ModelContra(PreTrainedModel):
         else:
             return loss
 
+# 加入astseq
+class ModelContraASTSeq(PreTrainedModel):
+    def __init__(self, encoder, config, tokenizer, args, ast_encoder=None):
+        super(ModelContraASTSeq, self).__init__(config)
+        self.encoder = encoder
+        self.ast_encoder = ast_encoder
+        self.config = config
+        self.tokenizer = tokenizer
+        self.mlp = nn.Sequential(nn.Linear(768*4, 768),
+                                 nn.Tanh(),
+                                 nn.Linear(768, 1),
+                                 nn.Sigmoid())
+
+        self.query_linear = nn.Linear(768, 768)
+        self.code_linear = nn.Linear(768 + 512, 768)
+
+        self.loss_func = nn.CrossEntropyLoss()
+        self.args = args
+
+    def forward(self, code_inputs, nl_inputs, ast_seq, ast_seq_level, labels, return_vec=False):
+        bs = code_inputs.shape[0]
+        inputs = torch.cat((code_inputs, nl_inputs), 0)
+        outputs = self.encoder(inputs, attention_mask=inputs.ne(1))[1]
+        code_vec = outputs[:bs]
+        nl_vec = outputs[bs:]
+
+        ast_vec = self.ast_encoder(ast_seq, ast_seq_level)
+
+        code_vec = torch.cat((code_vec, ast_vec), -1)
+
+        code_vec = self.code_linear(code_vec)
+        nl_vec = self.query_linear(nl_vec)
+
+        code_vec = F.normalize(code_vec, p=2, dim=-1, eps=1e-5)
+        nl_vec = F.normalize(nl_vec, p=2, dim=-1, eps=1e-5)
+
+        sims1 = torch.matmul(nl_vec, code_vec.t()) / 0.07
+        sims2 = torch.matmul(code_vec, nl_vec.t()) / 0.07
+
+
+        sims1 = sims1[labels == 1]
+        sims2 = sims2[labels == 1]
+
+        pos_size = sims1.shape[0]
+
+        label = torch.nonzero(labels==1).squeeze()
+
+        loss = (self.loss_func(sims1, label) + self.loss_func(sims2, label)) / pos_size
+
+        if return_vec:
+            return code_vec, nl_vec
+        else:
+            return loss
+
 
     # def forward(self, code_inputs, nl_inputs, labels, return_vec=False):
     #     bs = code_inputs.shape[0]
@@ -108,6 +162,7 @@ class ModelContra(PreTrainedModel):
     #         return code_vec, nl_vec
     #     else:
     #         return loss
+
 
 
 class ModelContraOnline(PreTrainedModel):

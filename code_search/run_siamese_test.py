@@ -244,7 +244,7 @@ def train(args, train_dataset, model, tokenizer):
         tr_num=0
         train_loss=0
         for step, batch in bar:
-            if torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1 or torch.sum(batch[2][48:]) <= 1:
+            if torch.sum(batch[2][:16]) <= 1 or torch.sum(batch[2][16:32]) <= 1 or torch.sum(batch[2][32:48]) <= 1 or torch.sum(batch[2][48:]) <= 1:
                 continue
             code_inputs = batch[0].to(args.device)
             nl_inputs = batch[1].to(args.device)

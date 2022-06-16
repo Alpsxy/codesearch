@@ -76,6 +76,17 @@ def _add_undirected_graph_positional_embedding(g, hidden_size, retry=10):
     g.ndata["seed"][0] = 1
     return g
 
+def pad_seq(seq_list, max_seq_len, pad_id):
+    new_seq_list = []
+
+    for seq in seq_list:
+        if len(seq) < max_seq_len:
+            new_seq = seq + [pad_id] * (max_seq_len - len(seq))
+            new_seq_list.append(new_seq)
+        else:
+            new_seq_list.append(seq[:max_seq_len])
+
+    return new_seq_list
 
 class LoadBalanceGraphDataset(torch.utils.data.IterableDataset):
     def __init__(
@@ -84,12 +95,17 @@ class LoadBalanceGraphDataset(torch.utils.data.IterableDataset):
             data_path="data/pretrain/",
             num_samples=10000,
             num_copies=1,
+            positional_embedding_size=32,
+            max_query_len=100,
+            pad_id=0
     ):
         super(LoadBalanceGraphDataset).__init__()
+        self.positional_embedding_size = positional_embedding_size
         self.data_path = data_path
         self.num_samples = num_samples
         self.query_vocab, self.ast_vocab = get_token_vocab(data_path)
         self.query_seq_list, self.codes, self.var_vocab, self.graphs = get_train_data(self.query_vocab, self.ast_vocab, data_path)
+        self.query_seq_list = pad_seq(self.query_seq_list, max_query_len, pad_id) 
         self.num_workers = num_workers
         self.graph_sizes = []
         for graph in self.graphs:

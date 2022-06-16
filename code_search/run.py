@@ -15,7 +15,7 @@ import json
 
 from tqdm import tqdm, trange
 import multiprocessing
-from models import ModelBinary, ModelContra, ModelContraOnline
+from models import ModelBinary, ModelContra, ModelContraASTSeq, ModelContraOnline
 from utils import acc_and_f1
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
@@ -26,6 +26,11 @@ from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           DistilBertConfig, DistilBertForMaskedLM, DistilBertTokenizer)
 from RMGC import RMGC
 import argparse
+import ast
+from vocab import WordVocab
+
+
+
 
 
 logger = logging.getLogger(__name__)
@@ -41,13 +46,15 @@ MODEL_CLASSES = {
 
 class InputFeatures(object):
     """A single training/test features for a example."""
-    def __init__(self, code_tokens, code_ids, nl_tokens, nl_ids, label, idx):
+    def __init__(self, code_tokens, code_ids, nl_tokens, nl_ids, ast_seq, ast_seq_level, label, idx):
         self.code_tokens = code_tokens
         self.code_ids = code_ids        # code tokenize后的ids
         self.nl_tokens = nl_tokens
         self.nl_ids = nl_ids            # nl tokenize后的ids
         self.label = label
         self.idx = idx
+        self.ast_seq = ast_seq
+        self.ast_seq_level = ast_seq_level
 
 
 class InputFeaturesTrip(InputFeatures):
@@ -58,7 +65,54 @@ class InputFeaturesTrip(InputFeatures):
         self.ds_ids = ds_ids
 
 
-def convert_examples_to_features(js, tokenizer, args):
+# 先序遍历
+# node是当前节点，paths, tmp, astnodes是记录路径，当前路径，和当前遍历
+def get_ast_seq(node, astnodes, paths, tmp):
+    astnodes.append(type(node).__name__)
+    tmp.append(type(node).__name__)
+    # 如果是叶子节点，记录路径
+    if next(ast.iter_child_nodes(node), None) is None:
+        paths.append(tmp[:])
+    else:
+        if not next(ast.iter_child_nodes(node), None) is None:
+            for child in ast.iter_child_nodes(node):
+                get_ast_seq(child, astnodes, paths, tmp)
+    # 弹出当前节点
+    tmp.pop()
+
+# 中序遍历， 顺便给每个ast节点加上了id
+def get_ast_seq_level(tree):
+    astnodes = []
+    nodes = []
+    current_idx = 0
+    for node in ast.walk(tree):
+        # 因为load，store这种可能会重复出现，所以加个判断，重复出现就不重新加id了
+        if node not in nodes:
+            nodes.append(node)
+            node.idx = current_idx
+            current_idx += 1
+        # 加上父节点
+        if not next(ast.iter_child_nodes(node), None) is None:
+            for child in ast.iter_child_nodes(node):
+                child.parent = node
+
+        astnodes.append(type(node).__name__)
+    return astnodes
+
+def tokenizer1(vocab, seq):
+    for i in range(len(seq)):
+        seq[i] = vocab.stoi.get(seq[i], vocab.unk_index)
+    return seq
+
+def pad_seq(seq, max_seq_len, pad_id):
+    if len(seq) < max_seq_len:
+        new_seq = seq + [pad_id] * (max_seq_len - len(seq))
+    else:
+        new_seq = seq[:max_seq_len]
+    return new_seq
+
+
+def convert_examples_to_features(js, tokenizer, args, ast_vocab):
     # label
     label = js['label']
 
@@ -73,6 +127,20 @@ def convert_examples_to_features(js, tokenizer, args):
     padding_length = args.max_seq_length - len(code_ids)
     code_ids += [tokenizer.pad_token_id]*padding_length
 
+    # ast_vocab = pickle.load(open(args.ast_vocab_path, 'rb'))
+
+    tree = ast.parse(code).body[0]
+
+    ast_seq, paths = [], []
+    get_ast_seq(tree, ast_seq, paths, [])
+    ast_seq_level = get_ast_seq_level(tree)
+    
+    ast_seq = tokenizer1(ast_vocab, ast_seq)
+    ast_seq_level = tokenizer1(ast_vocab, ast_seq_level)
+
+    ast_seq = pad_seq(ast_seq, args.max_seq_length, 0)
+    ast_seq_level = pad_seq(ast_seq_level, args.max_seq_length, 0)
+
     nl = js['doc']
 
     nl_tokens = tokenizer.tokenize(nl)[:args.max_seq_length-2]
@@ -81,7 +149,7 @@ def convert_examples_to_features(js, tokenizer, args):
     padding_length = args.max_seq_length - len(nl_ids)
     nl_ids += [tokenizer.pad_token_id]*padding_length
 
-    return InputFeatures(code_tokens, code_ids, nl_tokens, nl_ids, label, js['idx'])
+    return InputFeatures(code_tokens, code_ids, nl_tokens, nl_ids, ast_seq, ast_seq_level, label, js['idx'])
 
 
 class TextDataset(Dataset):
@@ -89,10 +157,15 @@ class TextDataset(Dataset):
         # file：json文件，每一个dict中包括：idx, query, doc, code(或者叫function_tokens，list形式), docstring_tokens(list形式)
         self.examples = []
         self.data=[]
+        ast_vocab = pickle.load(open(args.ast_vocab_path, 'rb'))
+        count = 0
         with open(file_path, 'r') as f:
             self.data = json.load(f)
         for js in self.data:
-            self.examples.append(convert_examples_to_features(js, tokenizer, args))
+
+            self.examples.append(convert_examples_to_features(js, tokenizer, args, ast_vocab))
+
+        print()
         # 如果是training集，就print前3个
         # if 'train' in file_path:
         #     for idx, example in enumerate(self.examples[:3]):
@@ -110,7 +183,9 @@ class TextDataset(Dataset):
         """ return both tokenized code ids and nl ids and label"""
         return torch.tensor(self.examples[i].code_ids), \
                torch.tensor(self.examples[i].nl_ids),\
-               torch.tensor(self.examples[i].label),
+               torch.tensor(self.examples[i].label),\
+               torch.tensor(self.examples[i].ast_seq),\
+               torch.tensor(self.examples[i].ast_seq_level)
                # torch.tensor(i)
 
 class RetievalDataset(Dataset):
@@ -120,16 +195,17 @@ class RetievalDataset(Dataset):
         self.examples = []  # codebase用code和code当成6k pair; testdata用query和code当成pair来算; examples前0-6267，code为6267-6767
         code_file = args.retrieval_code_base
         data_file = data_path
+        ast_vocab = pickle.load(open(args.ast_vocab_path, 'rb'))
         with open(code_file, 'r') as f:
             self.codes = json.loads(f.read())
         for code, code_id in self.codes.items():
             js = {'code': code, 'doc': code, 'label': 1, 'idx': code_id}
-            self.examples.append(convert_examples_to_features(js, tokenizer, args))
+            self.examples.append(convert_examples_to_features(js, tokenizer, args, ast_vocab))
         with open(data_file, 'r') as f:
             self.data = json.load(f)
         for js in self.data:
             new_js = {'code': js['code'], 'doc': js['doc'], 'label': js['label'], 'idx': js['retrieval_idx']}
-            self.examples.append(convert_examples_to_features(new_js, tokenizer, args))
+            self.examples.append(convert_examples_to_features(new_js, tokenizer, args, ast_vocab))
 
     def __len__(self):
         return len(self.examples)
@@ -138,7 +214,9 @@ class RetievalDataset(Dataset):
         """ return both tokenized code ids and nl ids and label"""
         return torch.tensor(self.examples[i].code_ids), \
                torch.tensor(self.examples[i].nl_ids),\
-               torch.tensor(self.examples[i].label)
+               torch.tensor(self.examples[i].label),\
+               torch.tensor(self.examples[i].ast_seq),\
+               torch.tensor(self.examples[i].ast_seq_level)
 
 
 def set_seed(seed=45):
@@ -222,15 +300,18 @@ def train(args, train_dataset, model, tokenizer):
         tr_num=0
         train_loss=0
         for step, batch in bar:
-            if (batch[2] == 0).all():
+            if torch.sum(batch[2][:args.per_gpu_train_batch_size]) <= 1 or torch.sum(batch[2][args.per_gpu_train_batch_size:2 * args.per_gpu_train_batch_size]) <= 1 or torch.sum(batch[2][2* args.per_gpu_train_batch_size:3 * args.per_gpu_train_batch_size]) <= 1 or torch.sum(batch[2][3 * args.per_gpu_train_batch_size:]) <= 1:
                 continue
             code_inputs = batch[0].to(args.device)
             nl_inputs = batch[1].to(args.device)
             # ds_inputs = batch[2].to(args.device)
             labels = batch[2].to(args.device)
 
+            ast_seq = batch[3].to(args.device)
+            ast_seq_level = batch[4].to(args.device)
+
             model.train()
-            loss = model(code_inputs, nl_inputs, labels)
+            loss = model(code_inputs, nl_inputs, ast_seq, ast_seq_level, labels)
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -333,8 +414,11 @@ def evaluate(args, model, tokenizer,eval_when_training=False):
         code_inputs = batch[0].to(args.device)
         nl_inputs = batch[1].to(args.device)
         labels = batch[2].to(args.device)
+        ast_seq = batch[3].to(args.device)
+        ast_seq_level = batch[4].to(args.device)
+
         with torch.no_grad():
-            code_vec, nl_vec = model(code_inputs, nl_inputs, labels, return_vec=True)
+            code_vec, nl_vec = model(code_inputs, nl_inputs, ast_seq, ast_seq_level, labels, return_vec=True)
             all_first_vec.append(code_vec.cpu())
             all_second_vec.append(nl_vec.cpu())
         nb_eval_steps += 1
@@ -452,7 +536,7 @@ def retrieval(args, model, tokenizer):
 def main():
     qra='switch'
     model=f'/data/jdfeng/CoCLR/model/search_codebert_ast'
-    os.environ['CUDA_VISIBLE_DEVICES'] = "0,1,2,3"
+    os.environ['CUDA_VISIBLE_DEVICES'] = "3,1,2,0"
     args = {
         "model_type": "roberta", 
         "augment": True, 
@@ -468,7 +552,7 @@ def main():
         "per_gpu_train_batch_size": 16, 
         "per_gpu_retrieval_batch_size": 67, 
         "learning_rate": 1e-4, 
-        "num_train_epochs": 20, 
+        "num_train_epochs": 50, 
         "gradient_accumulation_steps": 1, 
         "evaluate_during_training": True, 
         "checkpoint_path": "/data/jdfeng/CoCLR/model/codesearchnet/checkpoint-last", 
@@ -477,7 +561,7 @@ def main():
         "encoder_name_or_path": "microsoft/codebert-base",
         "config_name": "",
         "tokenizer_name": "",
-        "cache_dir": "",
+        "cache_dir": "/data/jdfeng/CoCLR/code_search/cache",
         "do_lower_case": False,
         "mrr_rank": 100,
         "weight_decay": 0.0,
@@ -499,6 +583,7 @@ def main():
         "test_predictions_output": None,
         "retrieval_predictions_output": None,
         "do_retrieval": False,
+        "ast_vocab_path":"/data/jdfeng/CoCLR/data/pretrain/ast_vocab.pickle"
     }
     args = argparse.Namespace(**args)
 
@@ -532,7 +617,6 @@ def main():
     #             args.start_step = int(stepf.readlines()[0].strip())
 
     #     logger.info("reload model from {}, resume from {} epoch".format(checkpoint_last, args.start_epoch))
-    args.cache_dir = '/data/jdfeng/CoCLR/code_search/cache'
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.encoder_name_or_path,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
@@ -558,9 +642,7 @@ def main():
     if args.ast_encode_path:
         ast_encoder.load_state_dict(torch.load(os.path.join(args.ast_encode_path, 'best_mrr.pkl'))['model_state_dict'], strict=False)
     
-    model = ModelContra(bert_model, ast_encoder, config, tokenizer, args)
-
-    
+    model = ModelContraASTSeq(bert_model, config, tokenizer, args, ast_encoder)
 
     # if args.checkpoint_path:
     #     model.load_state_dict(torch.load(os.path.join(args.checkpoint_path, 'pytorch_model.bin')))

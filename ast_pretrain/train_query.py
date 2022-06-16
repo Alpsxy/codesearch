@@ -131,18 +131,19 @@ def parse_option():
     parser.add_argument("--freq-embedding-size", type=int, default=16)
     parser.add_argument("--degree-embedding-size", type=int, default=16)
 
-
     parser.add_argument("--max_query_len", type=int, default=100)
     parser.add_argument("--pad_id", type=int, default=0)
 
-    parser.add_argument("--learning_rate", type=float, default=0.0001, help="learning rate")
+
+
+    parser.add_argument("--learning_rate", type=float, default=0.001, help="learning rate")
 
     # specify folder
-    parser.add_argument("--model-path", type=str, default='ast_pretrain/saved_models/GCC_CSN_lr0.0001', help="path to save model")
+    parser.add_argument("--model-path", type=str, default='ast_pretrain/saved_models/GCC_CSN_query_lr0.001', help="path to save model")
     parser.add_argument("--data-path", type=str, default='data/pretrain', help="path to save model")
 
     # GPU setting
-    parser.add_argument("--gpu", default=[0, 1, 2, 3], type=int, nargs='+', help="GPU id to use.")
+    parser.add_argument("--gpu", default=[2], type=int, nargs='+', help="GPU id to use.")
 
     # memory setting
     parser.add_argument("--moco", action="store_true", help="using MoCo (otherwise Instance Discrimination)")
@@ -179,7 +180,7 @@ def batcher():
         query, graph_q, graph_k = zip(*batch)
         #batch的效果是将 n 张小图打包在一起的操作可以看成是生成一张含 n 个不相连小图的大图。
         graph_q, graph_k = dgl.batch(graph_q), dgl.batch(graph_k)
-        return query, graph_q, graph_k
+        return torch.tensor(query), graph_q, graph_k
 
     return batcher_dev
 
@@ -226,10 +227,10 @@ def train_moco(
     for idx, batch in enumerate(train_loader):
         data_time.update(time.time() - end)
         query, graph_q, graph_k = batch
-        # query = query.to(torch.device(args.gpu))
+        query = query.to(torch.device(args.gpu))
         graph_q = graph_q.to(torch.device(args.gpu))
         graph_k = graph_k.to(torch.device(args.gpu))
-
+ 
         bsz = graph_q.batch_size
 
         if args.moco:
@@ -246,15 +247,15 @@ def train_moco(
             feat_q = model(graph_q)
             feat_k = model(graph_k)
 
-            # feat_query = model_query(query)
+            feat_query = model_query(query)
 
-            # sim1 = torch.matmul(feat_query, feat_q.t()) / args.nce_t
-            # sim2 = torch.matmul(feat_query, feat_k.t()) / args.nce_t
+            sim1 = torch.matmul(feat_query, feat_q.t()) / args.nce_t
+            sim2 = torch.matmul(feat_query, feat_k.t()) / args.nce_t
             sim3 = torch.matmul(feat_k, feat_q.t()) / args.nce_t
 
         optimizer.zero_grad()
-        loss = criterion(sim3)
-        # loss = criterion(sim1) + criterion(sim2) + criterion(sim3)
+        # loss = criterion(sim3)
+        loss = criterion(sim1) + criterion(sim2) + criterion(sim3)
         loss.backward()
         # 梯度裁剪
         grad_norm = clip_grad_norm(model.parameters(), args.clip_norm)
